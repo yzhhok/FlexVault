@@ -8,7 +8,7 @@
   "type": "module",
   "packageManager": "npm@10.9.8",
   "engines": {
-    "node": "^22.19.0 || >=24.11.0"
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
   },
   "scripts": {
     "dev": "wrangler dev -c wrangler.toml",
@@ -66,7 +66,7 @@
     "baseline-browser-mapping": "2.11.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260630.1",
+    "@cloudflare/workers-types": "^5.20261001.1",
     "@preact/preset-vite": "^2.10.6",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.4",
@@ -76,7 +76,7 @@
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "vite": "^8.3.2",
+    "vite": "^8.3.3",
     "wrangler": "^4.146.0"
   },
   "dependencies": {
