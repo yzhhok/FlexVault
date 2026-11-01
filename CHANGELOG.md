@@ -4,6 +4,16 @@
 
 本仓库在 [NodeWarden](https://github.com/shuaiplus/nodewarden) 基础上新增了 Node.js 自托管部署能力，并保持与 Cloudflare Workers 部署模式完全兼容。
 
+### 同步上游（2026-11-01, commit `db9a4dd`）
+- 合并上游提交 `fbc0e65`「fix(tooling): require patched Node.js security releases (#415)」，仅涉及工具链与依赖：
+  - `engines.node` 调整为 `^22.23.4 || ^24.22.1 || ^26.12.1`，`.node-version` 升至 `24.22.1`
+  - `@cloudflare/workers-types` 升至 `^5.20261001.1`（主版本升级，与 wrangler 的 peer 要求一致）
+  - `sharp` override 升至 `0.35.5`，`vite` 升至 `^8.3.3`
+  - `security-extra.yml`、`sync-global-domains.yml` 的 Node 版本固定为 `22.23.4`
+- 冲突处理：package.json 仅一处冲突，保留本地 `uuid: 11.1.1` override（上游无此条），其余采纳上游；自托管依赖（`@libsql/client`、`dotenv`、`node-cron`、`ws`、`@types/node-cron`、`@types/ws`）全部保留，README 未受影响
+- 用 npm 10.9.8 重新生成 lock；验证通过：`npm ci`、`tsc -p tsconfig.selfhosted.json --noEmit`、前端构建、5 组测试（51 用例）、自托管冒烟测试（`/`、`/api/config`、SPA 回退均 200）
+- 说明：workers-types 升至 v5 后，`.npmrc` 的 `legacy-peer-deps` 已非必需，暂保留作为兜底
+
 ### 同步上游（2026-10-09, commit `5148fb0`）
 - 合并上游 NodeWarden v1.8.1（9 个提交）：认证可靠性改进（`password-verifier` 模块、auth 服务加固）、密码库字段保留与 cipher 兼容性对齐、Web Vault 迁移至 Tailwind CSS 4（移除易受攻击的 braces 依赖，构建耗时 35s → 2s）、zh-TW 台湾本地化术语、Node.js 版本要求更新（`^22.19.0 || >=24.11.0`）、Bitwarden 全球域名规则同步、新增 vault-compatibility 测试（20 用例）
 - 冲突处理：package.json 采纳上游 Tailwind 4 技术栈（`@tailwindcss/vite`，移除 autoprefixer/postcss）及依赖版本，保留自托管依赖（`@libsql/client`、`dotenv`、`node-cron`、`ws`、`@types/node-cron`、`@types/ws`）；README 无冲突，FlexVault 内容保持不变

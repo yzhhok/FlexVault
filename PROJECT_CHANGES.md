@@ -470,6 +470,7 @@ gh run view <RUN_ID> --repo lj5645/FlexVault
 | — | 2026-09-07 | `4fe653d` | 修复 ACR attestation 推送失败 |
 | — | 2026-09-27 | `a2a7b54` / `7ce1b0a` / `ad22ba2` / `bf8ab6b` | 同步上游 25 提交；修复 Web Vault 500；lock 修复 |
 | 1.8.1 | 2026-10-09 | `5148fb0` / `8dd1b56` / `241feeb` | 同步上游 v1.8.1；Tailwind 4；`.npmrc` peer 修复；镜像发布 |
+| — | 2026-11-01 | `db9a4dd` | 同步上游 `fbc0e65`（Node 安全版本要求、workers-types v5、sharp 0.35.5）；51 用例与冒烟测试通过 |
 
 ---
 
