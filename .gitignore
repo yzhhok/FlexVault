@@ -63,6 +63,9 @@ NodeWarden-compat/
 .upstream/
 bitwarden-upstream/
 
+# Local-only working documents
+PROJECT_CHANGES.md
+
 # Compatibility analysis documents
 BITWARDEN_COMPATIBILITY_ANALYSIS.md
 security-audits/
