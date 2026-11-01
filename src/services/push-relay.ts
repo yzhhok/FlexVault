@@ -9,6 +9,7 @@ const INSTALLATIONS_URI = 'https://api.bitwarden.com/installations';
 const PUSH_INSTALLATION_ID_KEY = 'push.installation.id';
 const PUSH_INSTALLATION_KEY_KEY = 'push.installation.key';
 const PUSH_REQUEST_TIMEOUT_MS = 5000;
+const PUSH_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
 
 interface CachedPushAccessToken {
   token: string;
@@ -16,6 +17,20 @@ interface CachedPushAccessToken {
 }
 
 let cachedPushAccessToken: CachedPushAccessToken | null = null;
+// An unreachable relay (e.g. an offline self-hosted network) would otherwise
+// turn every vault notification into a fresh timeout plus error log entries.
+// After a transport failure all push attempts are skipped for one window.
+let pushRelayPausedUntil = 0;
+
+function isPushRelayPaused(): boolean {
+  return Date.now() < pushRelayPausedUntil;
+}
+
+function pausePushRelay(): void {
+  if (isPushRelayPaused()) return;
+  pushRelayPausedUntil = Date.now() + PUSH_FAILURE_BACKOFF_MS;
+  console.error(`Bitwarden push relay unreachable; pausing push notifications for 5 minutes`);
+}
 
 async function fetchPushEndpoint(url: string, init: RequestInit, errorMessage: string): Promise<Response | null> {
   const controller = new AbortController();
@@ -24,6 +39,7 @@ async function fetchPushEndpoint(url: string, init: RequestInit, errorMessage: s
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
     console.error(errorMessage, error);
+    pausePushRelay();
     return null;
   } finally {
     clearTimeout(timeout);
@@ -53,6 +69,7 @@ async function getPushInstallationCredentials(db: D1Database): Promise<{ id: str
 }
 
 export async function ensurePushInstallationCredentials(db: D1Database): Promise<{ id: string; key: string } | null> {
+  if (isPushRelayPaused()) return null;
   const existing = await getPushInstallationCredentials(db);
   if (existing) return existing;
 
@@ -74,6 +91,7 @@ export async function ensurePushInstallationCredentials(db: D1Database): Promise
 
   if (!response.ok) {
     console.error('Failed to request Bitwarden push installation:', response.status, await response.text().catch(() => ''));
+    pausePushRelay();
     return null;
   }
 
@@ -124,6 +142,7 @@ async function getPushAccessToken(env: Env): Promise<string | null> {
 
   if (!response.ok) {
     console.error('Failed to get Bitwarden push relay token:', response.status, await response.text().catch(() => ''));
+    pausePushRelay();
     return null;
   }
 
@@ -143,6 +162,7 @@ async function getPushAccessToken(env: Env): Promise<string | null> {
 }
 
 async function postToPushRelay(env: Env, path: string, body?: unknown): Promise<boolean> {
+  if (isPushRelayPaused()) return false;
   const token = await getPushAccessToken(env);
   if (!token) return false;
 
@@ -163,6 +183,7 @@ async function postToPushRelay(env: Env, path: string, body?: unknown): Promise<
 
   if (!response.ok) {
     console.error('Bitwarden push relay request failed:', path, response.status, await response.text().catch(() => ''));
+    pausePushRelay();
     return false;
   }
 
@@ -230,6 +251,7 @@ export async function notifyMobilePush(
     payload: Record<string, unknown> | null | undefined;
   }
 ): Promise<void> {
+  if (isPushRelayPaused()) return;
   const hasPushDevice = await env.DB
     .prepare('SELECT 1 FROM devices WHERE user_id = ? AND push_token IS NOT NULL AND push_token <> ? LIMIT 1')
     .bind(input.userId, '')
