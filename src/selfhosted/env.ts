@@ -225,6 +225,27 @@ export function resolveAssetFilePath(
   return { filePath };
 }
 
+// Same policy as the Workers entrypoint (src/index.ts): HTML and robots.txt
+// responses carry X-Robots-Tag so vault pages never end up in search indexes.
+export function addSearchIndexHeaders(request: Request, response: Response): Response {
+  const url = new URL(request.url);
+  const contentType = String(response.headers.get('Content-Type') || '').toLowerCase();
+  const shouldNoIndex =
+    url.pathname === '/robots.txt' ||
+    contentType.includes('text/html');
+
+  if (!shouldNoIndex) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export function createAssetsHandler(frontendPath?: string): SelfHostedEnv['ASSETS'] | undefined {
   if (!frontendPath) return undefined;
 

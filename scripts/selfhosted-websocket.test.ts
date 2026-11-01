@@ -7,11 +7,14 @@ import { WebSocket } from 'ws';
 import {
   createNotificationsHub,
   NotificationsHubServer,
+  NotificationsHubStub,
+  type NotificationsHubOptions,
 } from '../src/selfhosted/websocket';
 import { createJWT } from '../src/utils/jwt';
 
 const secret = 'selfhosted-websocket-test-secret-32-bytes';
 const hubPath = '/notifications/hub';
+const anonymousHubPath = '/notifications/anonymous-hub';
 
 async function accessToken(userId: string): Promise<string> {
   return createJWT(
@@ -25,16 +28,22 @@ async function accessToken(userId: string): Promise<string> {
   );
 }
 
-async function startHub(options?: { allowLegacyQueryToken?: boolean }): Promise<{
+async function startHub(options?: NotificationsHubOptions): Promise<{
   server: http.Server;
   hub: NotificationsHubServer;
   url: string;
+  anonymousUrl: string;
 }> {
   const server = http.createServer();
   const hub = createNotificationsHub(server, secret, hubPath, options);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
-  return { server, hub, url: `ws://127.0.0.1:${port}${hubPath}` };
+  return {
+    server,
+    hub,
+    url: `ws://127.0.0.1:${port}${hubPath}`,
+    anonymousUrl: `ws://127.0.0.1:${port}${anonymousHubPath}`,
+  };
 }
 
 async function stop(server: http.Server, hub: NotificationsHubServer): Promise<void> {
@@ -137,4 +146,147 @@ test('expired connection tokens are rejected', async (t) => {
   const ws = new WebSocket(`${url}?id=ticket-expired`);
   t.after(() => ws.terminate());
   assert.equal(await waitClose(ws), 1008);
+});
+
+function waitMessage(ws: WebSocket): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    ws.once('message', (data) => resolve(Buffer.from(data)));
+    ws.once('error', reject);
+  });
+}
+
+function waitForMessageMatching(
+  ws: WebSocket,
+  predicate: (data: Buffer) => boolean,
+  timeoutMs = 3000
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timed out waiting for message')), timeoutMs);
+    ws.on('message', (data) => {
+      const buf = Buffer.from(data);
+      if (predicate(buf)) {
+        clearTimeout(timer);
+        resolve(buf);
+      }
+    });
+    ws.once('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+function waitUpgradeFailure(ws: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ws.once('error', () => resolve());
+    ws.once('open', () => reject(new Error('connection unexpectedly opened')));
+  });
+}
+
+test('stub fetch accepts Request objects forwarded by upstream handlers', async (t) => {
+  const { server, hub } = await startHub();
+  t.after(() => stop(server, hub));
+
+  const stub = new NotificationsHubStub('user-request-obj', hub);
+
+  // Request.toString() is '[object Request]'; this used to throw Invalid URL.
+  const online = await stub.fetch(new Request('https://notifications/internal/online'));
+  assert.equal(online.status, 200);
+
+  const stored = await stub.fetch(new Request('https://notifications/internal/ws-token'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      token: 'ticket-via-request',
+      userId: 'user-request-obj',
+      deviceIdentifier: null,
+      expiresAt: Date.now() + 60_000,
+    }),
+  });
+  assert.equal(stored.status, 204);
+  assert.ok(hub.consumeWsConnectionToken('ticket-via-request'));
+});
+
+test('anonymous hub requires a valid auth request token', async (t) => {
+  const { server, hub, anonymousUrl } = await startHub({
+    validateAnonymousAuthRequest: async (id) => id === 'auth-request-1',
+  });
+  t.after(() => stop(server, hub));
+
+  const invalid = new WebSocket(`${anonymousUrl}?Token=missing-request`);
+  t.after(() => invalid.terminate());
+  await waitUpgradeFailure(invalid);
+});
+
+test('anonymous hub rejects upgrades when no validator is configured', async (t) => {
+  const { server, hub, anonymousUrl } = await startHub();
+  t.after(() => stop(server, hub));
+
+  const ws = new WebSocket(`${anonymousUrl}?Token=auth-request-1`);
+  t.after(() => ws.terminate());
+  await waitUpgradeFailure(ws);
+});
+
+test('auth request responses reach anonymous subscribers', async (t) => {
+  const { server, hub, anonymousUrl } = await startHub({
+    validateAnonymousAuthRequest: async (id) => id === 'auth-request-2',
+  });
+  t.after(() => stop(server, hub));
+
+  const ws = new WebSocket(`${anonymousUrl}?Token=auth-request-2`);
+  t.after(() => ws.terminate());
+  await waitOpen(ws);
+
+  // SignalR JSON handshake; the hub replies with the empty handshake ack.
+  ws.send(`{"protocol":"json","version":1}${String.fromCharCode(0x1e)}`);
+  const ack = await waitMessage(ws);
+  assert.equal(ack.toString('utf-8').replace(/\x1e/g, ''), '{}');
+
+  // Mirror the upstream notifyAuthRequestResponse call through the stub.
+  const stub = new NotificationsHubStub('auth-request-2', hub);
+  const response = await stub.fetch('https://notifications/internal/auth-request-response', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: 'approver-user',
+      authRequestId: 'auth-request-2',
+      contextId: null,
+    }),
+  });
+  assert.equal(response.status, 204);
+
+  const message = await waitForMessageMatching(ws, (buf) =>
+    buf.includes(Buffer.from('AuthRequestResponseRecieved'))
+  );
+  const text = message.toString('utf-8');
+  assert.match(text, /"approver-user"/);
+  assert.match(text, /"auth-request-2"/);
+
+  await closeClient(ws);
+});
+
+test('messagepack subscribers receive binary notifications', async (t) => {
+  const { server, hub, url } = await startHub();
+  t.after(() => stop(server, hub));
+
+  const token = await accessToken('user-messagepack');
+  const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
+  t.after(() => ws.terminate());
+  await waitOpen(ws);
+
+  ws.send(`{"protocol":"messagepack","version":1}${String.fromCharCode(0x1e)}`);
+  const ack = await waitMessage(ws);
+  assert.equal(ack.toString('utf-8').replace(/\x1e/g, ''), '{}');
+
+  hub.notifyVaultSync('user-messagepack', 'messagepack-probe-revision');
+
+  const frame = await waitForMessageMatching(ws, (buf) =>
+    buf.includes(Buffer.from('messagepack-probe-revision'))
+  );
+  // MessagePack hub protocol frames are binary [1, {}, null, target, args, []]
+  // with a varint length prefix, so the frame must not start with JSON '{'.
+  assert.notEqual(frame[0], 0x7b);
+  assert.ok(frame.includes(Buffer.from('ReceiveMessage')));
+
+  await closeClient(ws);
 });

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createAssetsHandler, resolveAssetFilePath } from '../src/selfhosted/env';
+import { addSearchIndexHeaders, createAssetsHandler, resolveAssetFilePath } from '../src/selfhosted/env';
 
 async function createDist(t: TestContext): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'nodewarden-assets-'));
@@ -97,4 +97,29 @@ test('conditional requests return 304 with the same etag', async (t) => {
   assert.equal(second.status, 304);
   assert.equal(second.headers.get('etag'), etag);
   assert.equal(await second.text(), '');
+});
+
+test('HTML and robots.txt responses carry the noindex header, others do not', async (t) => {
+  const dist = await createDist(t);
+  const assets = createAssetsHandler(dist);
+  assert.ok(assets);
+
+  // Same policy as the Workers entrypoint: vault pages must never be indexed.
+  const html = addSearchIndexHeaders(
+    new Request('http://localhost/'),
+    await assets.fetch(new Request('http://localhost/'))
+  );
+  assert.equal(html.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive, nosnippet');
+
+  const robots = addSearchIndexHeaders(
+    new Request('http://localhost/robots.txt'),
+    new Response('User-agent: *', { headers: { 'Content-Type': 'text/plain' } })
+  );
+  assert.equal(robots.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive, nosnippet');
+
+  // Non-HTML assets must pass through untouched.
+  const script = await assets.fetch(new Request('http://localhost/assets/app.js'));
+  const js = addSearchIndexHeaders(new Request('http://localhost/assets/app.js'), script);
+  assert.equal(js.headers.get('x-robots-tag'), null);
+  assert.equal(js.status, script.status);
 });

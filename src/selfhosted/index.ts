@@ -16,11 +16,13 @@ import {
   createEnv,
   setupNotificationsHub,
   createAssetsHandler,
+  addSearchIndexHeaders,
   DEFAULT_CONFIG,
   SelfHostedEnv,
 } from './env';
 import { nodeRequestToWebRequest, webResponseToNodeResponse } from './http';
 import { StorageService } from '../services/storage';
+import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { handleRequest } from '../router';
 import { applyCors } from '../utils/response';
 import { runScheduledBackupIfDue } from '../handlers/backup';
@@ -61,7 +63,8 @@ async function maybeServeAsset(request: Request, env: SelfHostedEnv): Promise<Re
   const url = new URL(request.url);
   if (isBackendRequestPath(url.pathname)) return null;
 
-  return env.ASSETS.fetch(request);
+  const response = await env.ASSETS.fetch(request);
+  return addSearchIndexHeaders(request, response);
 }
 
 async function ensureDatabaseInitialized(env: SelfHostedEnv): Promise<void> {
@@ -160,7 +163,23 @@ export async function startServer(): Promise<void> {
     env,
     config.jwtSecret,
     DEFAULT_CONFIG.websocketPath,
-    { allowLegacyQueryToken: config.allowLegacyWsQueryToken }
+    {
+      allowLegacyQueryToken: config.allowLegacyWsQueryToken,
+      // Match the upstream fetch handler: only non-expired auth requests may
+      // subscribe to their approval response on the anonymous hub. WebSocket
+      // upgrades bypass the fetch router, so the check runs here.
+      validateAnonymousAuthRequest: async (authRequestId: string): Promise<boolean> => {
+        try {
+          await ensureDatabaseInitialized(env);
+          if (dbInitError) return false;
+          const storage = new StorageService(env.DB as any);
+          const authRequest = await storage.getAuthRequestById(authRequestId);
+          return !!authRequest && !isAuthRequestExpired(authRequest);
+        } catch {
+          return false;
+        }
+      },
+    }
   );
 
   await new Promise<void>((resolve) => {

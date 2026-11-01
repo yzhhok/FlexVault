@@ -4,6 +4,16 @@
 
 本仓库在 [NodeWarden](https://github.com/shuaiplus/nodewarden) 基础上新增了 Node.js 自托管部署能力，并保持与 Cloudflare Workers 部署模式完全兼容。
 
+### 修复（2026-11-01, commit 待提交）
+
+- 修复 `NotificationsHubStub.fetch()` 收到 `Request` 对象时抛 `Invalid URL` 的问题（`Request.toString()` 返回 `[object Request]`，与 `createAssetsHandler` 历史 bug 同型）：改用与 `BackupTransferRunnerStub` 一致的解析方式（string / URL / Request 三种输入），并移除永不可达的完整 URL 兜底路径分支
+- 自托管 Web Vault 的 HTML 与 robots.txt 响应补充 `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet` 头（`addSearchIndexHeaders` 定义于 `env.ts`），与 Workers 入口行为一致
+- 自托管模式支持 `/notifications/anonymous-hub` WebSocket（设备审批推送）：HTTP upgrade 事件按路径分发（`noServer` 模式），匿名连接经 `validateAnonymousAuthRequest` 校验 auth request 未过期后按 authRequestId 组织，`/internal/auth-request-response` 端点真正广播 `AuthRequestResponseRecieved`（此前返回 204 静默跳过导致审批结果无法实时推送）
+- 自托管 WebSocket hub 支持 SignalR MessagePack 协议：握手时记录客户端声明的协议，推送按连接协议编码（JSON 文本帧 / MessagePack 二进制帧，含 varint 长度前缀），握手后的二进制帧回显对齐上游 Durable Object 行为（此前 MessagePack 客户端只能完成握手、无法解析推送帧）
+- `consumeWsConnectionToken` / `storeWsConnectionToken` 的过期判断由 `<` 改为 `<=`，与上游 Durable Object 对齐
+- push relay 网络或 HTTP 失败后退避 5 分钟（`push-relay.ts` 模块内状态，四个入口短路），缓解离线自托管环境下每次密码库通知都触发 5 秒超时加错误日志的问题
+- 新增 7 个测试用例（stub Request 对象回归、anonymous-hub 校验/广播、MessagePack 二进制帧、X-Robots-Tag），自托管测试组 25 例、全部测试组 58 例通过
+
 ### 同步上游（2026-11-01, commit `db9a4dd`）
 - 合并上游提交 `fbc0e65`「fix(tooling): require patched Node.js security releases (#415)」，仅涉及工具链与依赖：
   - `engines.node` 调整为 `^22.23.4 || ^24.22.1 || ^26.12.1`，`.node-version` 升至 `24.22.1`
