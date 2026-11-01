@@ -66,6 +66,10 @@ bitwarden-upstream/
 # Local-only working documents
 PROJECT_CHANGES.md
 
+# Upstream-only documents not published in this fork
+CONTRIBUTING.md
+SECURITY.md
+
 # Compatibility analysis documents
 BITWARDEN_COMPATIBILITY_ANALYSIS.md
 security-audits/
